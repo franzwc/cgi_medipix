@@ -1,0 +1,159 @@
+/*MAIN FILE
+--------------------------------------------------------------------------------
+--!@brief Listen_UDP_port.c
+--------------------------------------------------------------------------------                                                                      
+--! DESCRIPTION:
+--!
+--! Programa que abre uma porta UDP e aguarda chegada de pacotes e grava em 
+--! arquivo texto
+--!
+--! DETAILS:      
+--!
+--!- Project Name: Listen_UDP_port
+--!- Module Name: Listen_UDP_port.c
+--!- Tools: gedit 
+--!- Author: Franz Wagner
+--!- Company: LABORATORIO NACIONAL DE LUZ SINCROTRON - GRUPO DETECTORES
+--!- Create Date: 08/05/2014     
+--!- Version: 1.0.0 (mai/2014) 
+--------------------------------------------------------------------------------
+-- LNLS - DET - 2014
+--------------------------------------------------------------------------------
+-- ENTRADAS => numero de bits de aquisicao, numero de imagens , nome e caminho pra salvar sem o .dat
+*/
+#include<stdio.h>
+#include<string.h>
+#include<arpa/inet.h>
+#include<sys/socket.h>
+#include"global.h"
+
+int main(int argc, char *argv[])
+{
+    struct sockaddr_in si_me, si_other;
+    FILE *fp;
+    int sock, slen = sizeof(si_other) , recv_len;
+    int i,j;
+    int conta_img=1,conta_pacote=0;
+	int nimagens=1,nbits=0;
+	char caminho[100]="\0";
+	char arquivo[200]="\0";
+	char packet[3]="\0";
+    mem_aloc buff1[NPACK1];
+    char Image1[70000];
+	mem_aloc buff6[NPACK6];
+	mem_aloc buff12[NPACK12];
+	mem_aloc buff24[NPACK24];
+	int contador;
+	int ibit;
+
+	Generate6BitTable();
+
+	if (argc < 3) 
+	{
+         fprintf(stderr,"Error!!! Entre com o numero de bits, numero de imagens e caminho para salvar arquivo\n");
+         return -1;
+    }
+
+	nbits = atoi(argv[1]);
+	nimagens = atoi(argv[2]);
+	snprintf(caminho,sizeof(caminho),"%s",argv[3]);
+
+  	if ((sock=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1)
+   	{
+		fprintf(stderr,"Error open Socket!!!\n");
+		return -1;
+   	}
+    
+ 	bzero(&si_me,sizeof(si_me));
+   	si_me.sin_family = AF_INET;
+   	si_me.sin_port = htons(PORT);
+   	si_me.sin_addr.s_addr = htonl(INADDR_ANY);
+     
+   	if(bind(sock ,(struct sockaddr*)&si_me, sizeof(si_me)) == -1)
+   	{
+		fprintf(stderr,"Error on bind!!!\n");
+		return -1;
+   	}
+
+   	printf("Waiting for data...\n");
+	
+	for(conta_pacote=0;conta_pacote<=63;conta_pacote++)
+   	{
+    	bzero(buff1[conta_pacote],sizeof(buff1[conta_pacote]));
+	    if ((recv_len = recvfrom(sock, buff1[conta_pacote], 1028, 0, (struct sockaddr *) &si_other, &slen)) == -1)
+	    {
+   			fprintf(stderr,"Error on recvfrom1()!!!\n");
+   			return -1;
+	    }
+	}
+	close(sock);
+	contador=0;
+	for(i=0;i<=63;i++)
+	{
+		for(j=0;j<=256;j++)
+        {
+        	if(j>0)
+			{
+				for(ibit=0;ibit<=63;ibit++)
+				{
+					if((buff1[i][j] & 0x000000FF) >> 0 == LFSR6bits[ibit])
+					{
+						Image1[contador]=ibit;
+					}
+
+					if((buff1[i][j] & 0x0000FF00) >> 8 == LFSR6bits[ibit])
+					{
+						Image1[contador+1]=ibit;
+					}
+
+					if((buff1[i][j] & 0x00FF0000) >> 16 == LFSR6bits[ibit])
+					{
+						Image1[contador+2]=ibit;
+					}
+
+					if((buff1[i][j] & 0xFF000000) >> 24 == LFSR6bits[ibit])
+					{
+						Image1[contador+3]=ibit;
+					}
+				}
+				//Image1[contador]=(buff1[i][j] & 0x000000FF) >> 0;
+				//Image1[contador+1]=(buff1[i][j] & 0x0000FF00) >> 8;
+				//Image1[contador+2]=(buff1[i][j] & 0x00FF0000) >> 16;
+				//Image1[contador+3]=(buff1[i][j] & 0xFF000000) >> 24;
+				contador=contador+4;
+			}
+    	}
+    }
+		
+	//altera o nome do arquivo toda vez
+   	strcpy(arquivo,caminho);
+	snprintf(packet,sizeof(packet),"%d",conta_img);
+   	strcat(arquivo,packet);
+   	strcat(arquivo,".ppm");
+
+   	fp=fopen(arquivo,"w+");
+	
+   	if(fp==NULL)
+   	{    
+       	 fprintf(stderr,"Error open file %s\n",caminho);
+       	 return -1;
+   	}
+	fprintf(fp,"P2\n");
+	fprintf(fp,"256 256\n");
+	fprintf(fp,"63\n");
+
+	for(i=0;i<=65535;i++)
+	{
+		fprintf(fp,"%d ",Image1[i]);
+	   	if ((i+1)%256==0)
+		{	
+			fprintf(fp,"\n");
+		}
+	}
+ 
+   	fclose(fp);
+
+	printf("enjoy!\n\n");
+    return 0;
+}
+

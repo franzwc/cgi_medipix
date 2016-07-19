@@ -1,0 +1,962 @@
+/*CGI FILE
+--------------------------------------------------------------------------------
+--!@brief Server TCP
+--------------------------------------------------------------------------------                                                                      
+--! DESCRIPTION:
+--!
+--! Socket server TCP paramentro da porta passada como argumento
+--!
+--! DETAILS:      bloco abre um socket para conexao TCP que recebe dados do 
+--!               epics
+--!
+--!- Project Name: tcpserver
+--!- Module Name: server.c
+--!- Tools: gedit 
+--!- Author: Franz Wagner
+--!- Company: LABORATORIO NACIONAL DE LUZ SINCROTRON - GRUPO DETECTORES
+--!- Create Date: 27/02/2014     
+--!- Version: 1.0.0 (fev/2014) 
+--------------------------------------------------------------------------------
+-- LNLS - DET - 2014
+--------------------------------------------------------------------------------
+Header*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h> 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include "../utils/global.h"
+#include "../utils/persist.h"
+#include "../utils/interface_uc.h"
+#include "../utils/reg.h"
+
+// estado de gravaçao dos paramentros
+typedef enum { write_omr, 
+               write_dac,
+               none
+             } STATUS;
+
+
+int main(int argc, char *argv[])
+{
+     int sockfd, newsockfd, portno;
+     socklen_t clilen;
+     char buffer[20];
+     struct sockaddr_in serv_addr, cli_addr;
+     int res;
+     char *token;
+     char funcao[10];
+     int valor;
+	 float time;
+
+     STATUS status=none;
+     // structs dos parametros
+     omr_parameters_t omr_param;
+     dac_param_t dac_param;
+
+     if (argc < 2) {
+         fprintf(stderr,"ERRO, entre com a porta\n");
+         exit(1);
+     }
+     //le parametros gravados em disco
+	 if(read_omrfile(OMR_FILE,&omr_param) <0)
+     {
+	 		fprintf(stderr,"File %s not found\n",OMR_FILE);		
+     }
+     usleep(200);
+	 if(read_dacfile(DAC_FILE,&dac_param) <0)
+     {
+			fprintf(stderr,"File %s not found\n",DAC_FILE);		
+     }
+	 usleep(200);
+     // construindo um socket TCP/ IP  
+     //-- o SOCK_STREAM significa TCP o 0 significa IP
+     sockfd = socket(AF_INET, SOCK_STREAM, 0);
+     if (sockfd < 0){
+        perror("ERRO abrindo socket");
+        exit(1);
+        }
+     fprintf(stderr,"Socket Aberto\n");
+     // zera struct
+     memset((char *) &serv_addr,0, sizeof(serv_addr));//bzero
+     portno = atoi(argv[1]);
+     /* Nossa sin_family 
+        + AF_INET      (ARPA INTERNET PROTOCOLS) - "A mais usada"
+		+ AF_UNIX      (UNIX INTERNET PROTOCOLS)
+		+ AF_ISO       (ISO PROTOCOLS)
+		+ AF_NS        (XEROX NETWORK SYSTEM PROTOCOLS) */
+     serv_addr.sin_family = AF_INET;
+     /* Aqui o esquema é o seguinte:
+        htons significa "host to network short", como
+        é short trabalha com 2 bytes,mas ha ainda
+        outros tipos como: htonl("host to network
+        long",4 bytes), ntós("network to host
+        short",2 bytes), ntól("network to host
+        long", 4 bytes). */
+     serv_addr.sin_port = htons(portno);
+     /*bind() Une um nome ao seu socket.
+	   De modo bem prático, essa função serve para associar uma porta em sua
+	   máquina local para o seu socket.*/
+     if (bind(sockfd, (struct sockaddr *) &serv_addr,sizeof(serv_addr)) < 0){
+        perror("ERRO on binding");
+        exit(1);
+        }
+     /*listen() 
+       Funçao que espera uma determinada conexão em um socket. 
+       Para aceitar uma conexão, um socket é primeiro criado
+	   usando a função socket(), após a criação do mesmo, a função listen() entra
+       para setar o número de conexões que serão permitidas para determinado serviço.*/
+     listen(sockfd,5);
+     clilen = sizeof(cli_addr);
+     /* verifica se aceita a conexao ou nao 
+        Um socket cliente pede permissão
+		para um socket servidor para que ambos se comuniquem, essa função será a
+		que decidirá o futuro da conexão, se aceita ou rejeita.*/
+     newsockfd = accept(sockfd,(struct sockaddr *) &cli_addr,&clilen);
+     if (newsockfd < 0){ 
+        perror("ERRO on accept");
+        exit(1);
+        }
+
+     fprintf(stderr,"Conexao aceita!\n");
+     //depois de aceita a conexao entra em loop infinito
+     while(1)
+     {
+            // aloca e zera o buffer
+     		memset(buffer,0,sizeof(buffer));
+			//A função read() é equivalente a função recv() com um parâmetro flag de 0.
+     		res = read(newsockfd,buffer,sizeof(buffer));
+     		if (res < 0)
+			{
+		        perror("ERRO lendo do socket");
+		        exit(1);
+	        }
+		    printf("Aqui esta sua mensagem: %s\n",buffer);
+            // divide a mensagem em dois tokens funçao e valor
+	     	token=strtok(buffer," ");
+            // salva funçao 
+     		strcpy(funcao,token);
+			usleep(100);
+			// procura qual dado foi alterado faz a validaçao e 
+            // salva o valor na struct para ser gravado
+            if (strcmp(funcao,"-modesel")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+     			//printf("valor %d\n", valor);
+                if(valor<0 || valor >7)
+    			{
+					printf("!#ERROR=%s Invalid opmode.!#",&valor);
+			        status=none;
+				}
+			    else
+    			{
+					itoa(valor,omr_param.MODE,10);
+               		printf("omr_param.MODE %s\n", omr_param.MODE);
+    	        	status=write_omr;
+				}
+    		}
+     		else if (strcmp(funcao,"-reset")==0)
+     		{
+       			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-execbit")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+		    else if (strcmp(funcao,"-start")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-stop")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-flatfieldcorrection")==0)
+	     	{
+     			printf("valor %d\n", valor);
+		    }
+     		else if (strcmp(funcao,"-time")==0)
+     		{
+     			token=strtok(NULL," ");
+     			printf("valor string %s\n", token);
+	     		time=atoi(token);
+     			printf("valor float %f\n", token);
+                if(time<0.001 || time >100.999)
+    			{
+					printf("!#ERROR=%s Invalid time.!#",&time);
+			        status=none;
+				}
+			    else
+    			{
+					itoa(time,omr_param.TIME,10);
+               		printf("omr_param.TIME %s\n", omr_param.TIME);
+    	        	status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-colormode")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor >1)
+			    {
+					printf("!#ERROR= %d Invalid COLOURMODE Setting.!#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.COLOURMODE,10);
+					printf("omr_param.COLOURMODE %s\n", omr_param.COLOURMODE);
+					status=write_omr;
+				}
+	     	}
+     		else if (strcmp(funcao,"-gainmode")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor >3)
+				{
+					printf("!#ERROR=%d Invalid GAINMODE Setting.!#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.GAINMODE,10);
+					printf("omr_param.GAINMODE %s\n", omr_param.GAINMODE);
+    	        	status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-summode")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor >1)
+			    {
+					printf("!#ERROR=%d Invalid CSM_SPM Setting.!#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.CSM_SPM,10);
+					printf("omr_param.CSM_SPM %s\n", omr_param.CSM_SPM);
+    	        	status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-readwrite")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor>1 || valor <0)
+    			{
+					printf("!#ERROR=%d Invalid Protocol Setting.!#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.CRW_SRW,10);
+					printf("omr_param.CRW_SRW %s\n", omr_param.CRW_SRW);
+    	        	status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-polarity")==0)
+     		{
+                if(valor>1 || valor <0)
+    			{
+					printf("!#ERROR=%d Invalid POLARITY Setting.!#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.POLARITY,10);
+					printf("omr_param.POLARITY %s\n", omr_param.POLARITY);
+    	        	status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-clockext")==0)
+     		{
+		   		printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-extbgap")==0)
+	     	{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor >1)
+				{
+					printf("!#ERROR=%d Invalid EXTBGSEL Setting.!#",valor);
+					status=none;
+				}
+				else
+				{
+					itoa(valor,omr_param.EXTBGSEL,10);
+					printf("omr_param.EXTBGSEL %s\n", omr_param.EXTBGSEL);
+    		       	status=write_omr;
+				}
+		    }
+     		else if (strcmp(funcao,"-bias")==0)
+     		{
+		   		printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-discsel")==0)
+		    {
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-statuseq")==0)
+	     	{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-enabletp")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor >1)
+			    {
+					printf("!#ERROR= %d Invalid ENABLE_TP Setting.!#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.ENABLE_TP,10);
+					printf("omr_param.ENABLE_TP %s\n", omr_param.ENABLE_TP);
+    	    	    status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-frames")==0)
+		    {
+     			printf("valor %d\n", valor);
+		    }
+     		else if (strcmp(funcao,"-ctrange")==0)
+	     	{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor >3)
+				{
+					printf("!#ERROR=[%d] Invalid COUNTL !#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.COUNTL,10);
+					printf("omr_param.COUNTL %s\n", omr_param.COUNTL);
+    	        	status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-readports")==0)
+     		{
+	     		printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-extdac")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor >31)
+                {
+					printf("!#ERROR=%d Invalid EXTDAC Setting.!#",valor);
+					status=none;
+				}
+                else
+                {
+					itoa(valor,omr_param.EXTDAC,10);
+					printf("omr_param.EXTDAC %s\n", omr_param.EXTDAC);
+   	        		status=write_omr;
+				}
+     		}
+		    else if (strcmp(funcao,"-dacth0")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>511)
+                {
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+                else
+                {
+	            	itoa(valor,dac_param.THRESHOLD_0,10);
+					printf("dac_param.THRESHOLD_0 %s\n", dac_param.THRESHOLD_0);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-dacth1")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>511)
+                {
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+                else
+                {
+            		itoa(valor,dac_param.THRESHOLD_1,10);
+					printf("dac_param.THRESHOLD_1 %s\n", dac_param.THRESHOLD_1);
+            		status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-dacth2")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>511)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+            		itoa(valor,dac_param.THRESHOLD_2,10);
+					printf("dac_param.THRESHOLD_2 %s\n", dac_param.THRESHOLD_2);
+            		status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-dacth3")==0)
+		    {
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>511)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+            		itoa(valor,dac_param.THRESHOLD_3,10);
+					printf("dac_param.THRESHOLD_3 %s\n", dac_param.THRESHOLD_3);
+            		status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-dacth4")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>511)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.THRESHOLD_4,10);
+					printf("dac_param.THRESHOLD_4 %s\n", dac_param.THRESHOLD_4);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-dacth5")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>511)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.THRESHOLD_5,10);
+					printf("dac_param.THRESHOLD_5 %s\n", dac_param.THRESHOLD_5);
+	            	status=write_dac;
+				}
+     		}
+	     	else if (strcmp(funcao,"-dacth6")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>511)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	    	        itoa(valor,dac_param.THRESHOLD_6,10);
+					printf("dac_param.THRESHOLD_6 %s\n", dac_param.THRESHOLD_6);
+	    	        status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-dacth7")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>511)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.THRESHOLD_7,10);
+					printf("dac_param.THRESHOLD_7 %s\n", dac_param.THRESHOLD_7);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-preamp")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.PREAMP,10);
+					printf("dac_param.PREAMP %s\n", dac_param.PREAMP);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-ikrum")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.IKRUM,10);
+					printf("dac_param.IKRUM %s\n", dac_param.IKRUM);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-shaper")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.SHAPER,10);
+					printf("dac_param.SHAPER %s\n", dac_param.SHAPER);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-disc")==0)
+		    {
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.DISC,10);
+					printf("dac_param.DISC %s\n", dac_param.DISC);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-discls")==0)
+		    {
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.DISCLS,10);
+					printf("dac_param.DISCLS %s\n", dac_param.DISCLS);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-dacdiscl")==0)
+		    {
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.DAC_DISCL,10);
+					printf("dac_param.DAC_DISCL %s\n", dac_param.DAC_DISCL);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-dacdisch")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.DAC_DISCH,10);
+					printf("dac_param.DAC_DISCH %s\n", dac_param.DAC_DISCH);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-delay")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.DELAY,10);
+					printf("dac_param.DELAY %s\n", dac_param.DELAY);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-tpbuffin")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.TP_BUFFER_IN,10);
+					printf("dac_param.TP_BUFFER_IN %s\n", dac_param.TP_BUFFER_IN);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-tpbuffout")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.TP_BUFFER_OUT,10);
+					printf("dac_param.TP_BUFFER_OUT %s\n", dac_param.TP_BUFFER_OUT);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-pzc")==0)
+		    {
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.RPZ,10);
+					printf("dac_param.RPZ %s\n", dac_param.RPZ);
+    	        	status=write_dac;
+				}
+     		}
+		    else if (strcmp(funcao,"-gnd")==0)
+		    {
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.GND,10);
+					printf("dac_param.GND %s\n", dac_param.GND);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-tpref")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.TP_REF,10);
+					printf("dac_param.TP_REF %s\n", dac_param.TP_REF);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-fbk")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.FBK,10);
+					printf("dac_param.FBK %s\n", dac_param.FBK);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-cas")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>255)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.CAS,10);
+					printf("dac_param.CAS %s\n", dac_param.CAS);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-tprefa")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>511)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	    	        itoa(valor,dac_param.TP_REFA,10);
+					printf("dac_param.TP_REFA %s\n", dac_param.TP_REFA);
+	    	        status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-tprefb")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor>511)
+				{
+					printf("!#ERROR=%d Invalid threshold.!#",valor);
+					status=none;
+				}
+				else
+				{
+	            	itoa(valor,dac_param.TP_REFB,10);
+					printf("dac_param.TP_REFB %s\n", dac_param.TP_REFB);
+	            	status=write_dac;
+				}
+     		}
+     		else if (strcmp(funcao,"-maskbit")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-testbit")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-adjl")==0)
+     		{
+     			printf("valor %d\n", valor);  
+     		}
+     		else if (strcmp(funcao,"-readout")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-adjh")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-colsel")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor >1)
+			    {
+					printf("!#ERROR= %d Invalid COLUMBLOCKSEL Setting.!#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.COLUMBLOCKSEL,10);
+					printf("omr_param.COLUMBLOCKSEL %s\n", omr_param.COLUMBLOCKSEL);
+    	        	status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-rowsel")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+                if(valor<0 || valor >1)
+			    {
+					printf("!#ERROR= %d Invalid ROWBLOCKSEL Setting.!#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.ROWBLOCKSEL,10);
+					printf("omr_param.ROWBLOCKSEL %s\n", omr_param.ROWBLOCKSEL);
+			        status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-colblock")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor >7)
+			    {
+					printf("!#ERROR=%d Invalid COLUMNBLOCK Setting.!#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.COLUMNBLOCK,10);
+					printf("omr_param.COLUMNBLOCK %s\n", omr_param.COLUMNBLOCK);
+	            	status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-rowblock")==0)
+     		{
+				token=strtok(NULL," ");
+	     		valor=atoi(token);
+				if(valor<0 || valor >7)
+			    {
+					printf("!#ERROR=%d Invalid ROWBLOCK Setting.!#",valor);
+					status=none;
+				}
+			    else
+			    {
+					itoa(valor,omr_param.ROWBLOCK,10);
+					printf("omr_param.ROWBLOCK %s\n", omr_param.ROWBLOCK);
+	    	        status=write_omr;
+				}
+     		}
+     		else if (strcmp(funcao,"-tpcharge")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-tpperiod")==0)
+     		{
+     			printf("valor %d\n", valor);   
+     		}
+		    else if (strcmp(funcao,"-tpnpulses")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-tpspacing")==0)
+     		{
+     			printf("valor %d\n", valor);  
+	     	}
+     		else if (strcmp(funcao,"-eqalpha")==0)
+		    {
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-eqenergy")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-eqacqtime")==0)
+     		{
+	     		printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-eqtarget")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-eqnloops")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else if (strcmp(funcao,"-eqtype")==0)
+     		{
+     			printf("valor %d\n", valor);
+     		}
+     		else
+     		{
+            	status=none;
+            	printf("OPCAO NAO ENCONTRADA\n");
+	 		}
+     		// verifica se algum dado foi alterado e passa para gravaçao
+     		switch(status)
+     		{
+	 			case 0:                   
+            	          printf("omr\n");
+   	  					  strcpy(omr_param.MODE,"7");
+                          validate_omr_param(omr_param);
+            	          break;
+	            case 1:
+    	                  printf("dac\n");
+					      strcpy(omr_param.MODE,"4");
+                          validate_dac_param(dac_param);
+                          break;
+    	        default:
+    	                  printf("nada\n");
+                          break;
+     		}
+            // responde que o dado foi recebido com sucesso
+     		res = write(newsockfd,"Mensagem Recebida com Sucesso!",18);
+     		if (res < 0)
+            {
+		        perror("ERRO escrevendo no socket");
+        		exit(1);
+        	}
+     }
+     close(newsockfd);
+     close(sockfd);
+     return 0; 
+}
+
+int validate_omr_param(omr_parameters_t param)
+{
+    printf("\n ESCREVE NO ARQUIVO\n");
+    usleep(100);
+	if(write_omrfile(OMR_FILE,&param) <0)
+	{
+		fprintf(stderr,"ERROR write file %s \n",OMR_FILE);		
+	}
+    usleep(100);
+    /*if(write_omr_param_device(&interface)){
+		printf("!#ERROR=Cannot write on device.!#");
+		return -1;
+	}else{
+		printf("\n ESCREVENDO\n");
+	}*/
+
+	return 0;
+	
+}
+
+int validate_dac_param(dac_param_t param)
+{
+    printf("\n ESCREVE NO ARQUIVO\n");
+    usleep(100);
+	if(write_dacfile(DAC_FILE,&param) <0)
+	{
+		fprintf(stderr,"ERROR write file %s \n",DAC_FILE);		
+	}
+    usleep(100);
+	/*if(write_dac_param_device(param)){
+		printf("!#ERROR=Cannot write on device.!#");
+		return -1;
+	}else{
+		
+	}*/
+
+	return 0;
+	
+}
